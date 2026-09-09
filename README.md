@@ -1,2 +1,2 @@
-# Game-Maker-s-Oven---Game-1
+# Game Maker's Oven - Game 1
 Potential game
