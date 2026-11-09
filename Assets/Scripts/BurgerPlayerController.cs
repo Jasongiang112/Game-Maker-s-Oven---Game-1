@@ -1,5 +1,6 @@
 using UnityEngine;
 using UnityEngine.InputSystem;
+using UnityEngine.UI;
 
 [RequireComponent(typeof(Rigidbody))]
 public class BurgerPlayerController : MonoBehaviour
@@ -13,6 +14,13 @@ public class BurgerPlayerController : MonoBehaviour
     [SerializeField] private float dashSpeed = 18f;
     [SerializeField] private float dashDuration = 0.3f;
     [SerializeField] private GameObject starAuraPrefab;
+
+    [Header("Stamina")]
+    [SerializeField] private float maximumStamina = 3f;
+    [SerializeField] private float dashStaminaCost = 1f;
+    [SerializeField] private float staminaRegenerationRate = 0.75f;
+    [SerializeField] private float staminaRegenerationDelay = 0.75f;
+    [SerializeField] private Slider staminaSlider;
 
     [Header("Spin Attack")]
     [SerializeField] private float spinSpeed = 720f;
@@ -28,37 +36,124 @@ public class BurgerPlayerController : MonoBehaviour
     [SerializeField] private float groundCheckDistance = 0.75f;
     [SerializeField] private LayerMask groundLayers = ~0;
 
+    [Header("Environmental Damage")]
+    [SerializeField] private int sinkPitDamage = 30;
+    [SerializeField]
+    private Vector3 respawnPosition =
+        new Vector3(0f, 0.81f, -20f);
+
     private Rigidbody body;
+    private PlayerHealth playerHealth;
+
     private Vector2 moveInput;
 
-    public bool HasMoveInput => moveInput.sqrMagnitude > 0.01f;
-
     private bool isSpinning;
-    public bool IsSpinning => isSpinning;
     private float spinRemaining;
 
     private bool isDashing;
-    public bool IsDashing => isDashing;
-
     private float dashEndTime;
     private Vector3 dashDirection;
     private GameObject activeStarAura;
 
+    private float currentStamina;
+    private float staminaRegenerationStartTime;
+
+    public bool HasMoveInput =>
+        moveInput.sqrMagnitude > 0.01f;
+
+    public bool IsSpinning =>
+        isSpinning;
+
+    public bool IsDashing =>
+        isDashing;
+
+    public float CurrentStamina =>
+        currentStamina;
+
+    public float MaximumStamina =>
+        maximumStamina;
+
     private void Awake()
     {
         body = GetComponent<Rigidbody>();
+
+        playerHealth =
+            GetComponent<PlayerHealth>();
+
         body.freezeRotation = true;
-        body.interpolation = RigidbodyInterpolation.Interpolate;
-        body.collisionDetectionMode = CollisionDetectionMode.Continuous;
+
+        body.interpolation =
+            RigidbodyInterpolation.Interpolate;
+
+        body.collisionDetectionMode =
+            CollisionDetectionMode.Continuous;
+
+        currentStamina = maximumStamina;
+
+        SetupStaminaBar();
     }
 
     private void Update()
     {
-        if (isDashing && Time.time >= dashEndTime)
+        UpdateDashTimer();
+        ReadMovementInput();
+        ReadDashInput();
+        ReadAttackInput();
+        ReadJumpInput();
+        RegenerateStamina();
+    }
+
+    private void FixedUpdate()
+    {
+        Vector3 desiredVelocity;
+
+        if (isDashing)
         {
-            EndDash();
+            desiredVelocity =
+                dashDirection * dashSpeed;
+
+            body.linearVelocity =
+                new Vector3(
+                    desiredVelocity.x,
+                    body.linearVelocity.y,
+                    desiredVelocity.z
+                );
+        }
+        else
+        {
+            desiredVelocity =
+                new Vector3(
+                    moveInput.x,
+                    0f,
+                    moveInput.y
+                ) * moveSpeed;
+
+            Vector3 currentHorizontalVelocity =
+                new Vector3(
+                    body.linearVelocity.x,
+                    0f,
+                    body.linearVelocity.z
+                );
+
+            Vector3 velocityChange =
+                Vector3.MoveTowards(
+                    currentHorizontalVelocity,
+                    desiredVelocity,
+                    acceleration *
+                    Time.fixedDeltaTime
+                ) - currentHorizontalVelocity;
+
+            body.AddForce(
+                velocityChange,
+                ForceMode.VelocityChange
+            );
         }
 
+        UpdateSpin(desiredVelocity);
+    }
+
+    private void ReadMovementInput()
+    {
         Keyboard keyboard = Keyboard.current;
 
         if (keyboard == null)
@@ -70,44 +165,98 @@ public class BurgerPlayerController : MonoBehaviour
         float horizontal = 0f;
         float vertical = 0f;
 
-        if (keyboard.aKey.isPressed || keyboard.leftArrowKey.isPressed)
+        if (keyboard.aKey.isPressed ||
+            keyboard.leftArrowKey.isPressed)
+        {
             horizontal -= 1f;
+        }
 
-        if (keyboard.dKey.isPressed || keyboard.rightArrowKey.isPressed)
+        if (keyboard.dKey.isPressed ||
+            keyboard.rightArrowKey.isPressed)
+        {
             horizontal += 1f;
+        }
 
-        if (keyboard.sKey.isPressed || keyboard.downArrowKey.isPressed)
+        if (keyboard.sKey.isPressed ||
+            keyboard.downArrowKey.isPressed)
+        {
             vertical -= 1f;
+        }
 
-        if (keyboard.wKey.isPressed || keyboard.upArrowKey.isPressed)
+        if (keyboard.wKey.isPressed ||
+            keyboard.upArrowKey.isPressed)
+        {
             vertical += 1f;
+        }
 
-        moveInput = Vector2.ClampMagnitude(
-            new Vector2(horizontal, vertical),
-            1f
-        );
+        moveInput =
+            Vector2.ClampMagnitude(
+                new Vector2(
+                    horizontal,
+                    vertical
+                ),
+                1f
+            );
+    }
 
-        //press shift to dash 
+    private void ReadDashInput()
+    {
+        Keyboard keyboard = Keyboard.current;
+
+        if (keyboard == null)
+        {
+            return;
+        }
+
         bool shiftPressed =
             keyboard.leftShiftKey.wasPressedThisFrame ||
             keyboard.rightShiftKey.wasPressedThisFrame;
 
-        if (shiftPressed && !isDashing)
+        if (!shiftPressed)
         {
-            StartDash();
+            return;
         }
 
-        //f to spin + spawns 
-        if (keyboard.fKey.wasPressedThisFrame && !isSpinning)
+        if (isDashing)
         {
-            isSpinning = true;
-            spinRemaining = 360f;
-
-            SpawnSlash();
+            return;
         }
 
-        // press space to jump
-        if (keyboard.spaceKey.wasPressedThisFrame && IsGrounded())
+        if (currentStamina < dashStaminaCost)
+        {
+            return;
+        }
+
+        StartDash();
+    }
+
+    private void ReadAttackInput()
+    {
+        Keyboard keyboard = Keyboard.current;
+
+        if (keyboard == null)
+        {
+            return;
+        }
+
+        if (keyboard.fKey.wasPressedThisFrame &&
+            !isSpinning)
+        {
+            StartAttack();
+        }
+    }
+
+    private void ReadJumpInput()
+    {
+        Keyboard keyboard = Keyboard.current;
+
+        if (keyboard == null)
+        {
+            return;
+        }
+
+        if (keyboard.spaceKey.wasPressedThisFrame &&
+            IsGrounded())
         {
             body.AddForce(
                 Vector3.up * jumpForce,
@@ -116,37 +265,47 @@ public class BurgerPlayerController : MonoBehaviour
         }
     }
 
-    //dashing 
     private void StartDash()
     {
-        isDashing = true;
-        dashEndTime = Time.time + dashDuration;
+        currentStamina =
+            Mathf.Max(
+                0f,
+                currentStamina -
+                dashStaminaCost
+            );
 
-        // use movement input/ face forward if standing still.
+        staminaRegenerationStartTime =
+            Time.time +
+            dashDuration +
+            staminaRegenerationDelay;
+
+        UpdateStaminaBar();
+
+        isDashing = true;
+
+        dashEndTime =
+            Time.time + dashDuration;
+
         dashDirection = HasMoveInput
-            ? new Vector3(moveInput.x, 0f, moveInput.y).normalized
+            ? new Vector3(
+                moveInput.x,
+                0f,
+                moveInput.y
+            ).normalized
             : Vector3.ProjectOnPlane(
                 transform.forward,
                 Vector3.up
             ).normalized;
 
-        if (starAuraPrefab != null)
+        SpawnStarAura();
+    }
+
+    private void UpdateDashTimer()
+    {
+        if (isDashing &&
+            Time.time >= dashEndTime)
         {
-            //make star aura follow burger 
-            activeStarAura = Instantiate(
-                starAuraPrefab,
-                transform.position,
-                transform.rotation,
-                transform
-            );
-
-            activeStarAura.transform.localPosition = Vector3.zero;
-
-            foreach (ParticleSystem effect in
-                activeStarAura.GetComponentsInChildren<ParticleSystem>())
-            {
-                effect.Play();
-            }
+            EndDash();
         }
     }
 
@@ -161,99 +320,186 @@ public class BurgerPlayerController : MonoBehaviour
         }
     }
 
-    private void SpawnSlash()
+    private void SpawnStarAura()
     {
-        if (slashPrefab == null) return;
+        if (starAuraPrefab == null)
+        {
+            return;
+        }
 
-        Vector3 spawnPosition =
-            transform.position +
-            transform.forward * slashForwardOffset +
-            Vector3.up * slashHeightOffset;
+        activeStarAura =
+            Instantiate(
+                starAuraPrefab,
+                transform.position,
+                transform.rotation,
+                transform
+            );
 
-        Quaternion spawnRotation =
-            transform.rotation *
-            Quaternion.Euler(slashRotationOffset);
+        activeStarAura
+            .transform
+            .localPosition = Vector3.zero;
 
-        GameObject slash = Instantiate(
-            slashPrefab,
-            spawnPosition,
-            spawnRotation
-        );
+        ParticleSystem[] effects =
+            activeStarAura
+                .GetComponentsInChildren
+                    <ParticleSystem>();
 
-        Destroy(slash, slashLifetime);
+        foreach (ParticleSystem effect in effects)
+        {
+            effect.Play();
+        }
     }
 
-    private void FixedUpdate()
+    private void RegenerateStamina()
     {
-        Vector3 desiredVelocity;
-
         if (isDashing)
         {
-            desiredVelocity = dashDirection * dashSpeed;
-
-            // apply dash speed immediately + preserving vertical velocity.
-            body.linearVelocity = new Vector3(
-                desiredVelocity.x,
-                body.linearVelocity.y,
-                desiredVelocity.z
-            );
+            return;
         }
-        else
+
+        if (Time.time <
+            staminaRegenerationStartTime)
         {
-            desiredVelocity =
-                new Vector3(moveInput.x, 0f, moveInput.y) * moveSpeed;
-
-            Vector3 currentHorizontal = new Vector3(
-                body.linearVelocity.x,
-                0f,
-                body.linearVelocity.z
-            );
-
-            Vector3 velocityChange = Vector3.MoveTowards(
-                currentHorizontal,
-                desiredVelocity,
-                acceleration * Time.fixedDeltaTime
-            ) - currentHorizontal;
-
-            body.AddForce(
-                velocityChange,
-                ForceMode.VelocityChange
-            );
+            return;
         }
 
+        if (currentStamina >= maximumStamina)
+        {
+            return;
+        }
+
+        currentStamina =
+            Mathf.MoveTowards(
+                currentStamina,
+                maximumStamina,
+                staminaRegenerationRate *
+                Time.deltaTime
+            );
+
+        UpdateStaminaBar();
+    }
+
+    private void SetupStaminaBar()
+    {
+        if (staminaSlider == null)
+        {
+            return;
+        }
+
+        staminaSlider.minValue = 0f;
+
+        staminaSlider.maxValue =
+            maximumStamina;
+
+        staminaSlider.wholeNumbers = false;
+
+        UpdateStaminaBar();
+    }
+
+    private void UpdateStaminaBar()
+    {
+        if (staminaSlider != null)
+        {
+            staminaSlider.value =
+                currentStamina;
+        }
+    }
+
+    private void StartAttack()
+    {
+        isSpinning = true;
+        spinRemaining = 360f;
+
+        SpawnSlash();
+    }
+
+    private void UpdateSpin(
+        Vector3 desiredVelocity)
+    {
         if (isSpinning)
         {
-            float rotation = Mathf.Min(
-                spinSpeed * Time.fixedDeltaTime,
-                spinRemaining
+            float rotation =
+                Mathf.Min(
+                    spinSpeed *
+                    Time.fixedDeltaTime,
+                    spinRemaining
+                );
+
+            transform.Rotate(
+                0f,
+                rotation,
+                0f
             );
 
-            transform.Rotate(0f, rotation, 0f);
             spinRemaining -= rotation;
 
             if (spinRemaining <= 0f)
             {
+                spinRemaining = 0f;
                 isSpinning = false;
             }
+
+            return;
         }
-        else if (desiredVelocity.sqrMagnitude > 0.05f)
+
+        if (desiredVelocity.sqrMagnitude <= 0.05f)
         {
-            Quaternion targetRotation = Quaternion.LookRotation(
+            return;
+        }
+
+        Quaternion targetRotation =
+            Quaternion.LookRotation(
                 desiredVelocity.normalized,
                 Vector3.up
             );
 
-            transform.rotation = Quaternion.Slerp(
+        transform.rotation =
+            Quaternion.Slerp(
                 transform.rotation,
                 targetRotation,
-                12f * Time.fixedDeltaTime
+                12f *
+                Time.fixedDeltaTime
             );
+    }
+
+    private void SpawnSlash()
+    {
+        if (slashPrefab == null)
+        {
+            return;
         }
+
+        Vector3 spawnPosition =
+            transform.position +
+            transform.forward *
+            slashForwardOffset +
+            Vector3.up *
+            slashHeightOffset;
+
+        Quaternion spawnRotation =
+            transform.rotation *
+            Quaternion.Euler(
+                slashRotationOffset
+            );
+
+        GameObject slash =
+            Instantiate(
+                slashPrefab,
+                spawnPosition,
+                spawnRotation
+            );
+
+        Destroy(
+            slash,
+            slashLifetime
+        );
     }
 
     private bool IsGrounded()
     {
-        Vector3 origin = transform.position + Vector3.up * 0.1f;
+        Vector3 origin =
+            transform.position +
+            Vector3.up * 0.1f;
 
         return Physics.SphereCast(
             origin,
@@ -266,9 +512,24 @@ public class BurgerPlayerController : MonoBehaviour
         );
     }
 
-    private void OnTriggerEnter(Collider other)
+    private void OnTriggerEnter(
+        Collider other)
     {
-        if (other.CompareTag("Respawn"))
+        if (!other.CompareTag("Respawn"))
+        {
+            return;
+        }
+
+        if (playerHealth != null)
+        {
+            playerHealth
+                .TakeEnvironmentalDamage(
+                    sinkPitDamage
+                );
+        }
+
+        if (playerHealth == null ||
+            !playerHealth.IsDead)
         {
             Respawn();
         }
@@ -281,9 +542,21 @@ public class BurgerPlayerController : MonoBehaviour
         isSpinning = false;
         spinRemaining = 0f;
 
-        body.linearVelocity = Vector3.zero;
-        body.angularVelocity = Vector3.zero;
-        transform.position = new Vector3(0f, 0.81f, -20f);
+        currentStamina =
+            maximumStamina;
+
+        staminaRegenerationStartTime = 0f;
+
+        UpdateStaminaBar();
+
+        body.linearVelocity =
+            Vector3.zero;
+
+        body.angularVelocity =
+            Vector3.zero;
+
+        transform.position =
+            respawnPosition;
     }
 
     private void OnDisable()

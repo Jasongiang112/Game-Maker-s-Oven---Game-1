@@ -1,47 +1,27 @@
 using UnityEngine;
 using UnityEngine.UI;
-using UnityEngine.InputSystem;
 
-public class PlayerHealth : MonoBehaviour
+[RequireComponent(typeof(Slider))]
+public class HealthBar : MonoBehaviour
 {
-    public Slider healthBar;
-    public float maxHealth = 100f;
+    public PlayerHealth playerHealth;
 
-    private float currentHealth;
-    
-    //keeps track of health for hearth symbol change
-    public float CurrentHealth => currentHealth;
+    private Slider healthBar;
 
-    void Start()
+    private void Awake()
     {
-        currentHealth = maxHealth;
-
+        healthBar = GetComponent<Slider>();
         healthBar.minValue = 0f;
-        healthBar.maxValue = maxHealth;
-        healthBar.value = currentHealth;
     }
 
-    void Update()
+    private void Update()
     {
-        // Press H to test taking damage.
-        if (Keyboard.current != null &&
-            Keyboard.current.hKey.wasPressedThisFrame)
+        if (playerHealth == null)
         {
-            TakeDamage(10f);
+            return;
         }
-    }
 
-    public void TakeDamage(float damage)
-    {
-        currentHealth = Mathf.Clamp(
-            currentHealth - damage, 0f, maxHealth
-        );
-
-        healthBar.value = currentHealth;
-
-        if (currentHealth <= 0f)
-        {
-            Debug.Log("Player died!");
-        }
+        healthBar.maxValue = playerHealth.MaximumHealth;
+        healthBar.value = playerHealth.CurrentHealth;
     }
 }
